@@ -96,12 +96,15 @@ class GitPy:
         except Exception:
             return []
 
-    def commit(self, message):
+    def commit(self, message, files=None):
         if not self.is_repo():
             return False, "Не git-репозиторий"
         if self.has_subprocess:
             try:
-                subprocess.run(["git", "add", "."], cwd=self.project_path, check=True, capture_output=True)
+                if files:
+                    subprocess.run(["git", "add"] + files, cwd=self.project_path, check=True, capture_output=True)
+                else:
+                    subprocess.run(["git", "add", "."], cwd=self.project_path, check=True, capture_output=True)
                 subprocess.run(["git", "commit", "-m", message], cwd=self.project_path, check=True, capture_output=True)
                 return True, ""
             except subprocess.CalledProcessError as e:

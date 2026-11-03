@@ -109,6 +109,19 @@ def _find_symbol_code(file_path, symbol):
     return None
 
 
+
+def _safe_path(project_path, rel_path):
+    if not rel_path:
+        return None
+    try:
+        root = os.path.realpath(project_path)
+        full = os.path.realpath(os.path.join(root, rel_path))
+        if not (full == root or full.startswith(root + os.sep)):
+            return None
+        return full
+    except Exception:
+        return None
+
 def validate(actions, project_path):
     errors, warnings = [], []
     for a in actions:
@@ -120,7 +133,10 @@ def validate(actions, project_path):
             errors.append(f"{a.type}: отсутствует 'file'")
             continue
         if a.file and a.type not in ("create_file", "create_directory"):
-            full = os.path.join(project_path, a.file)
+            full = _safe_path(project_path, a.file)
+            if not full:
+                errors.append(f"{a.type}: путь '{a.file}' выходит за пределы проекта или некорректен")
+                continue
             if not os.path.exists(full):
                 errors.append(f"{a.type}: файл '{a.file}' не найден")
                 continue
@@ -173,12 +189,13 @@ def validate(actions, project_path):
         elif a.type == "create_file":
             if not a.file:
                 errors.append("create_file: отсутствует 'file'")
-            elif not os.path.realpath(os.path.join(project_path, a.file)).startswith(
-                    os.path.realpath(project_path)):
-                errors.append(f"create_file: путь '{a.file}' вне проекта")
+            elif not _safe_path(project_path, a.file):
+                errors.append(f"create_file: путь '{a.file}' выходит за пределы проекта")
         elif a.type == "create_directory":
             if not a.path:
                 errors.append("create_directory: отсутствует 'path'")
+            elif not _safe_path(project_path, a.path):
+                errors.append(f"create_directory: путь '{a.path}' выходит за пределы проекта")
         elif a.type == "delete_file":
             if not a.file:
                 errors.append("delete_file: отсутствует 'file'")
@@ -189,6 +206,48 @@ def validate(actions, project_path):
             errors.append(f"Неизвестный тип: {a.type}")
     return errors, warnings
 
+
+
+def _replace_symbol_in_text(text, symbol, new_code):
+    import ast
+    try:
+        tree = ast.parse(text)
+    except Exception:
+        return text
+
+    parts = symbol.split('.')
+    target_class = parts[0] if len(parts) > 1 else None
+    target_name = parts[-1]
+    node_to_replace = None
+
+    for node in tree.body:
+        if target_class is None:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == target_name:
+                node_to_replace = node
+                break
+        else:
+            if isinstance(node, ast.ClassDef) and node.name == target_class:
+                if target_name == target_class:
+                    node_to_replace = node
+                    break
+                for sub in node.body:
+                    if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and sub.name == target_name:
+                        node_to_replace = sub
+                        break
+                if node_to_replace:
+                    break
+
+    if node_to_replace:
+        lines = text.splitlines(keepends=True)
+        start = node_to_replace.lineno - 1
+        end = node_to_replace.end_lineno
+        new_lines = new_code.splitlines(keepends=True)
+        if lines[end-1].endswith('\n') and new_lines and not new_lines[-1].endswith('\n'):
+            new_lines[-1] += '\n'
+        if not new_lines:
+            new_lines = []
+        return "".join(lines[:start] + new_lines + lines[end:])
+    return text
 
 def simulate(actions, project_path):
     result = SimulationResult()
@@ -206,7 +265,10 @@ def simulate(actions, project_path):
             file_acts[a.file].append(a)
 
     for file_path, acts in file_acts.items():
-        full = os.path.join(project_path, file_path)
+        full = _safe_path(project_path, file_path)
+        if not full:
+            result.errors.append(f"Небезопасный путь: {file_path}")
+            continue
         if not os.path.exists(full):
             result.errors.append(f"Файл не существует: {file_path}")
             continue
@@ -224,9 +286,7 @@ def simulate(actions, project_path):
                 result.warnings.append(f"replace_block: блок не найден в {file_path}: {str(a.old)[:60]}")
         for a in acts:
             if a.type == "replace_symbol":
-                old_code = _find_symbol_code(full, a.symbol)
-                if old_code:
-                    new = new.replace(old_code, a.new_code, 1)
+                new = _replace_symbol_in_text(new, a.symbol, a.new_code)
         for a in acts:
             if a.type == "add_import" and a.module:
                 line = f"import {a.module}" + (f" as {a.alias}" if a.alias else "")
@@ -263,23 +323,37 @@ def apply_simulation(simulation, project_path):
     import shutil
     logger = get_logger("codegen")
     applied_files, created, errors, backups = [], [], [], []
+
     try:
-        for file_path, (old, new) in simulation.changes.items():
-            full = os.path.join(project_path, file_path)
-            bak = full + ".codegen.bak"
+        # === ФАЗА 1: Создание бэкапов для всех изменяемых и удаляемых файлов ===
+        for file_path in simulation.changes.keys():
+            full = _safe_path(project_path, file_path)
+            if not full: raise ValueError(f"Небезопасный путь: {file_path}")
             if os.path.exists(full):
+                bak = full + ".codegen.bak"
                 shutil.copy2(full, bak)
                 backups.append((full, bak))
-            with open(full, "w", encoding="utf-8") as f:
-                f.write(new)
-            applied_files.append(file_path)
+
         for item in simulation.creations:
-            full = os.path.join(project_path, item.get("file") or item.get("path"))
             if item.get("type") == "delete_file":
+                full = _safe_path(project_path, item.get("file") or item.get("path"))
+                if not full: raise ValueError(f"Небезопасный путь: {item}")
                 if os.path.exists(full):
                     bak = full + ".codegen.bak"
                     shutil.copy2(full, bak)
                     backups.append((full, bak))
+
+        # === ФАЗА 2: Применение изменений ===
+        for file_path, (old, new) in simulation.changes.items():
+            full = _safe_path(project_path, file_path)
+            with open(full, "w", encoding="utf-8") as f:
+                f.write(new)
+            applied_files.append(file_path)
+
+        for item in simulation.creations:
+            full = _safe_path(project_path, item.get("file") or item.get("path"))
+            if item.get("type") == "delete_file":
+                if os.path.exists(full):
                     os.remove(full)
                     created.append(full)
             elif item.get("is_dir"):
@@ -290,16 +364,21 @@ def apply_simulation(simulation, project_path):
                 with open(full, "w", encoding="utf-8") as f:
                     f.write(item.get("content", ""))
                 created.append(full)
+
+        # === УСПЕХ: Очистка бэкапов ===
         for _, bak in backups:
             if os.path.exists(bak):
                 os.remove(bak)
         return True, applied_files, created, []
+
     except Exception as e:
         logger.exception("apply_simulation failed: %s", e)
+        # === ОТКАТ: Восстановление всех бэкапов ===
         for full, bak in backups:
             if os.path.exists(bak):
                 shutil.copy2(bak, full)
                 os.remove(bak)
+        # Удаление созданных файлов
         for p in created:
             try:
                 if os.path.exists(p) and not any(p == b[0] for b in backups):
@@ -310,3 +389,6 @@ def apply_simulation(simulation, project_path):
             except Exception:
                 pass
         return False, [], [], [str(e)]
+
+
+
