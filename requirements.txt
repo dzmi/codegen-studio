@@ -1,0 +1,4 @@
+# Codegen Studio: обязателен только pygments (подсветка)
+# dulwich — опциональный (чистый Python git без установки git.exe)
+pygments>=2.19
+dulwich>=0.21
