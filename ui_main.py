@@ -72,6 +72,7 @@ class StudioWindow:
         f.add_command(label=self._t("item_refresh_tree"), command=self.refresh_tree)
         f.add_separator()
         f.add_command(label=self._t("item_docs"), command=self._docs_dialog)
+        f.add_command(label="Инициализировать структуру...", command=self._init_project_scaffolding)
         f.add_separator()
         f.add_command(label=self._t("item_exit"), command=self._on_close_main)
         m.add_cascade(label=self._t("menu_file"), menu=f)
@@ -297,6 +298,15 @@ class StudioWindow:
         self.backend_label.config(text=f"Git: {self.git.backend()}")
         self._update_project_label()
         self.refresh_tree()
+
+        # Если нет папки docs, предлагаем инициализировать структуру
+        if not (Path(self.project_path) / "docs").exists():
+            ans = messagebox.askyesno(
+                "Новый проект", 
+                "В этой папке нет структуры документации (docs/).\nСоздать базовую структуру для разработки (docs, logs, dumps, .gitignore)?"
+            )
+            if ans:
+                self._init_project_scaffolding()
 
     def _ensure_gitignore(self):
         if not self.project_path:
@@ -543,6 +553,87 @@ class StudioWindow:
         ttk.Button(bf, text=self._t("msg_cancel"), command=win.destroy).pack(side=tk.RIGHT, padx=2)
         ttk.Button(bf, text=self._t("msg_save"), command=do_save).pack(side=tk.RIGHT, padx=2)
         win.wait_window()
+
+    def _init_project_scaffolding(self):
+        if not self.project_path:
+            messagebox.showinfo(self._t("msg_info"), "Сначала откройте проект")
+            return
+        if not messagebox.askyesno("Инициализация", "Создать базовую структуру (docs, logs, dumps, .gitignore)?"):
+            return
+
+        base = Path(self.project_path)
+
+        # 1. .gitignore
+        gi = base / ".gitignore"
+        gi_entries = ["__pycache__/", "*.pyc", "logs/", "dumps/", ".codegen_studio/", "*.codegen.bak"]
+        existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
+        lines = [ln.strip() for ln in existing.splitlines()]
+        to_add = [e for e in gi_entries if e not in lines]
+        if to_add:
+            with gi.open("a", encoding="utf-8") as f:
+                if existing and not existing.endswith("\n"): f.write("\n")
+                for e in to_add: f.write(e + "\n")
+
+        # 2. Папки
+        (base / "logs").mkdir(exist_ok=True)
+        (base / "dumps").mkdir(exist_ok=True)
+        docs = base / "docs"
+        for d in ["tutorials", "how-to", "reference", "explanation", "adr"]:
+            (docs / d).mkdir(parents=True, exist_ok=True)
+
+        # 3. Базовые файлы
+        def _write(rel, content):
+            p = base / rel
+            if not p.exists():
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content.strip() + "\n", encoding="utf-8")
+
+        _write("docs/INDEX.md", """# 📚 Документация проекта
+
+Структура построена по стандарту **Diátaxis**.
+
+## 🎓 Tutorials (Уроки)
+- [Начало работы](tutorials/01_GETTING_STARTED.md)
+
+## 🛠️ How-to Guides (Руководства)
+- [Рабочий процесс](how-to/01_WORKFLOW.md)
+
+## 📖 Reference (Справочники)
+- [Формат JSON](reference/01_JSON_FORMAT.md)
+
+## 🧠 Explanation (Объяснения)
+- [Контекст проекта (Базовый промпт)](explanation/01_PROJECT_CONTEXT.md)
+- [Архитектура](explanation/02_ARCHITECTURE.md)
+- [Правила разработки](explanation/03_GUIDELINES.md)
+""")
+
+        _write("docs/explanation/01_PROJECT_CONTEXT.md", """# Контекст проекта
+
+## Краткая выжимка для ИИ (ОБЯЗАТЕЛЬНО ЗАПОЛНИТЬ)
+Опишите здесь домен проекта, стек технологий, стандарты и ключевые правила, которые ИИ должна знать перед генерацией кода.
+
+---
+
+## 1. Цель проекта
+...
+""")
+
+        _write("docs/explanation/03_GUIDELINES.md", """# Правила разработки
+
+## 1. Железные правила
+1. Любая запись файла — через `apply_simulation`.
+2. Для замены функций используй `replace_symbol`.
+3. Для замены переменных — `replace_block`.
+""")
+
+        _write("README.md", "# Новый проект\n\nОписание проекта.\n")
+        _write("requirements.txt", "# Зависимости проекта\n")
+
+        self.log("✅ Базовая структура проекта инициализирована")
+        messagebox.showinfo("Готово", "Структура папок (docs, logs, dumps) успешно создана!")
+        self.refresh_tree()
+        self._update_project_label()
+
 
     def _focus_find(self):
         self.find_entry.focus_set()
