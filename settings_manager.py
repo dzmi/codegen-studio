@@ -5,9 +5,10 @@ import os
 
 DEFAULTS = {
     "mode": "window",
+    "language": "ru",
     "always_on_top": True,
     "toolbar_pos": [100, 100],
-    "window_geometry": "1100x700+200+100",
+    "window_geometry": "1300x800+100+50",
 }
 
 _SETTINGS_DIR = os.path.join(os.path.expanduser("~"), ".codegen_studio")

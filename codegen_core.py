@@ -119,7 +119,7 @@ def validate(actions, project_path):
                       "delete_block", "add_import") and not a.file:
             errors.append(f"{a.type}: отсутствует 'file'")
             continue
-        if a.file and a.type != "create_file":
+        if a.file and a.type not in ("create_file", "create_directory"):
             full = os.path.join(project_path, a.file)
             if not os.path.exists(full):
                 errors.append(f"{a.type}: файл '{a.file}' не найден")

@@ -38,19 +38,21 @@ class GitPy:
         return "none"
 
     def init(self):
+        if self.is_repo():
+            return False, "Уже инициализирован"
         if HAS_DULWICH:
             try:
                 porcelain.init(self.project_path)
-                return True
+                return True, ""
             except Exception:
                 pass
         if self.has_subprocess:
             try:
                 subprocess.run(["git", "init"], cwd=self.project_path, check=True, capture_output=True)
-                return True
-            except Exception:
-                pass
-        return False
+                return True, ""
+            except Exception as e:
+                return False, str(e)
+        return False, "Git недоступен"
 
     def status(self):
         if not self.is_repo():

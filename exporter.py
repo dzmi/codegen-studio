@@ -14,7 +14,7 @@ DEFAULT_EXCLUDES = {
     "build", "dist", ".tox",
     "logs", "dumps", "archive",
     ".lmstudio_editor", ".lmstudio_cache",
-    ".ropeproject",
+    ".ropeproject", ".codegen_studio",
 }
 
 TEXT_EXTENSIONS = {
@@ -73,7 +73,7 @@ def should_include(file_path, root, gitignore_rules, extra_excludes=None):
         return False
     rel_str = str(rel).replace("\\", "/")
     excluded = DEFAULT_EXCLUDES | (extra_excludes or set())
-    for part in rel.parts[:-1]:
+    for part in rel.parts:
         if part in excluded:
             return False
     for pat in EXCLUDE_FILES:
