@@ -45,14 +45,32 @@ def main():
                 save_last_project(path)
 
         root = tk.Tk()
+        from logger import setup
+        import os
+        setup(os.path.dirname(os.path.abspath(__file__)))
         StudioWindow_Patched = PatchedStudio
         app = StudioWindow_Patched(root, project_path=get_last_project())
         root.mainloop()
     except Exception:
+        import traceback
+        err_text = traceback.format_exc()
         traceback.print_exc()
         try:
-            from tkinter import messagebox
-            messagebox.showerror("Codegen Studio", traceback.format_exc())
+            import tkinter as tk2
+            from tkinter import scrolledtext as sc2
+            w = tk2.Tk()
+            w.title("Ошибка запуска Codegen Studio")
+            w.geometry("800x500")
+            tk2.Label(w, text="Приложение упало. Скопируйте трейсбек:", font=("Segoe UI", 10)).pack(pady=5)
+            txt = sc2.ScrolledText(w, wrap=tk2.WORD, font=("Consolas", 10))
+            txt.insert("1.0", err_text)
+            txt.pack(fill=tk2.BOTH, expand=True, padx=10, pady=5)
+            def cp():
+                w.clipboard_clear()
+                w.clipboard_append(err_text)
+                w.destroy()
+            tk2.Button(w, text="📋 КОПИРОВАТЬ И ЗАКРЫТЬ", command=cp, bg="#e74c3c", fg="white", font=("Segoe UI", 10, "bold"), pady=5).pack(pady=10)
+            w.mainloop()
         except Exception:
             pass
 

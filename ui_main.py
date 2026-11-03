@@ -32,6 +32,7 @@ class StudioWindow:
         self._drag_y = 0
         root.title("Codegen Studio")
         root.geometry(_s.get("window_geometry", "1100x700+200+100"))
+        root.protocol("WM_DELETE_WINDOW", self._on_close_main)
         self._build_menu()
         self._build_toolbar()
         self._build_main()
@@ -48,12 +49,12 @@ class StudioWindow:
         f.add_command(label="Открыть проект…", command=self.open_project_dialog)
         f.add_command(label="Обновить дерево", command=self.refresh_tree)
         f.add_separator()
+        f.add_command(label="Документация…", command=self._docs_dialog)
+        f.add_separator()
         f.add_command(label="Выход", command=self.root.quit)
         m.add_cascade(label="Файл", menu=f)
         e = tk.Menu(m, tearoff=0)
-        e.add_command(label="Быстрый дамп JSON", command=self.quick_dump_json)
-        e.add_command(label="Экспорт JSON…", command=self.export_json_dialog)
-        e.add_command(label="Экспорт ZIP…", command=self.export_zip_dialog)
+        e.add_command(label="Экспорт проекта…", command=self._dump_dialog)
         e.add_separator()
         e.add_command(label="Копировать структуру", command=self.copy_structure)
         e.add_command(label="Промпт для ИИ…", command=self._prompts_dialog)
@@ -67,18 +68,20 @@ class StudioWindow:
         self.root.config(menu=m)
 
     def _build_toolbar(self):
-        self.toolbar_bar = tk.Frame(self.root, relief=tk.RAISED, bd=1, bg="#f0f0f0")
-        self.toolbar_bar.pack(side=tk.TOP, fill=tk.X)
+        self.toolbar_bar = ttk.Frame(self.root)
+        self.toolbar_bar.pack(side=tk.TOP, fill=tk.X, padx=2, pady=2)
+
         h = tk.Label(self.toolbar_bar, text="\u28ff", cursor="fleur", bg="#dcdcdc",
-                     padx=8, pady=4, font=("Arial", 12, "bold"))
-        h.pack(side=tk.LEFT)
+                     padx=6, pady=2, font=("Segoe UI", 11, "bold"), relief=tk.GROOVE, bd=1)
+        h.pack(side=tk.LEFT, padx=(0, 4), pady=2)
         self._toolbar_handle = h
-        self.project_label = tk.Label(self.toolbar_bar, text="— проект не открыт —",
-                                      bg="#f0f0f0", fg="#333",
-                                      font=("Arial", 9, "bold"), padx=6)
-        self.project_label.pack(side=tk.LEFT)
-        self._proj_sep = tk.Frame(self.toolbar_bar, bg="#c0c0c0", width=1)
-        self._proj_sep.pack(side=tk.LEFT, fill=tk.Y, padx=4)
+
+        self.project_label = tk.Label(self.toolbar_bar, text="\U0001F4C2 AI_lite",
+                                      bg="#e8f4ff", fg="#004080", relief=tk.SUNKEN, bd=1,
+                                      font=("Segoe UI", 10, "bold"), padx=6, pady=2)
+        self.project_label.pack(side=tk.LEFT, padx=2, pady=2)
+
+        ttk.Separator(self.toolbar_bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
 
         def _tip(widget, text):
             tip = {"win": None}
@@ -87,56 +90,60 @@ class StudioWindow:
                     tip["win"] = tk.Toplevel(widget)
                     tip["win"].wm_overrideredirect(True)
                     tip["win"].wm_geometry(f"+{e.x_root+8}+{e.y_root+22}")
-                    tk.Label(tip["win"], text=text, bg="#ffffcc", relief=tk.SOLID,
-                             bd=1, padx=6, pady=2, font=("Arial", 9)).pack()
-                except Exception:
-                    pass
+                    tk.Label(tip["win"], text=text, bg="#ffffe1", fg="#000", relief=tk.SOLID, bd=1, padx=6, pady=2, font=("Segoe UI", 9)).pack()
+                except Exception: pass
             def leave(e):
                 try:
-                    if tip["win"]:
-                        tip["win"].destroy()
-                        tip["win"] = None
-                except Exception:
-                    pass
+                    if tip["win"]: tip["win"].destroy(); tip["win"] = None
+                except Exception: pass
             widget.bind("<Enter>", enter, add="+")
             widget.bind("<Leave>", leave, add="+")
 
-        def btn(txt, cmd, tip=""):
-            b = tk.Button(self.toolbar_bar, text=txt, command=cmd, bd=0, relief=tk.FLAT,
-                          bg="#f0f0f0", activebackground="#d0d0d0", padx=8, pady=4,
-                          font=("Arial", 9), cursor="hand2")
-            b.pack(side=tk.LEFT, padx=1)
-            if tip:
-                _tip(b, tip)
+        def btn(txt, cmd, tip="", width=11):
+            b = ttk.Button(self.toolbar_bar, text=txt, command=cmd, width=width)
+            b.pack(side=tk.LEFT, padx=2, pady=2)
+            if tip: _tip(b, tip)
             return b
 
-        btn("\U0001F4C1 Проект", self.open_project_dialog, "Открыть папку проекта")
-        btn("\U0001F4E5 JSON", self._json_dialog, "Вставить JSON-инструкции и применить (шаг 1)")
-        btn("\U0001F4AC Промпт", self._prompts_dialog, "Скопировать промпт для внешней LLM с контекстом проекта")
-        btn("\u2705 Применить", self.apply_from_clipboard, "Применить JSON из буфера обмена")
-        btn("\u26a1 Дамп", self.quick_dump_json, "Быстрый JSON-дамп в папку dumps/")
-        btn("\U0001F4BE Git", self.git_commit_dialog, "Git commit")
-        btn("\u2699", self.open_settings_dialog, "Настройки")
+        btn("Проект", self.open_project_dialog, "1. Открыть папку проекта (Ctrl+O)")
+        btn("Промпт", self._prompts_dialog, "2. Скопировать промпт для ИИ")
+        
+        ttk.Separator(self.toolbar_bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
+        
+        # Специальная зеленая кнопка JSON
+        b_json = tk.Button(self.toolbar_bar, text="Вставить JSON", command=self._json_dialog,
+                           bg="#4CAF50", fg="white", activebackground="#45a049", activeforeground="white",
+                           font=("Segoe UI", 10, "bold"), relief=tk.RAISED, bd=1, padx=8, pady=2, cursor="hand2")
+        b_json.pack(side=tk.LEFT, padx=2, pady=2)
+        _tip(b_json, "3. Вставить JSON-инструкции")
+        
+        btn("Применить", self.apply_from_clipboard, "4. Применить из буфера обмена")
+        
+        ttk.Separator(self.toolbar_bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=4)
+        
+        self.btn_export = btn("Экспорт", self._dump_dialog, "5. Сохранить проект в JSON/ZIP")
+        self.btn_docs = btn("Docs", self._docs_dialog, "Открыть документацию")
+        self.btn_git = btn("Git", self.git_commit_dialog, "Git commit")
+        
+        b_settings = ttk.Button(self.toolbar_bar, text="\u2699", command=self.open_settings_dialog, width=3)
+        b_settings.pack(side=tk.LEFT, padx=2, pady=2)
+        _tip(b_settings, "Настройки")
 
-        # Spacer — тянется, служит для перетаскивания окна
         self._spacer = tk.Frame(self.toolbar_bar, bg="#f0f0f0", cursor="fleur")
         self._spacer.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        self.backend_label = tk.Label(self.toolbar_bar, text="", fg="gray",
-                                      bg="#f0f0f0", font=("Arial", 8), padx=4)
-        self.backend_label.pack(side=tk.RIGHT, padx=4)
+        close_btn = ttk.Button(self.toolbar_bar, text="\u2715", command=getattr(self, "_on_close_main", self.root.destroy), width=3)
+        close_btn.pack(side=tk.RIGHT, padx=(2, 4), pady=2)
+        _tip(close_btn, "Закрыть приложение")
 
-        self.mode_btn = tk.Button(self.toolbar_bar, text="\u25a3", command=self._toggle_mode,
-                                  bd=0, relief=tk.FLAT, bg="#f0f0f0", activebackground="#d0d0d0",
-                                  padx=8, pady=4, font=("Arial", 11), cursor="hand2")
-        self.mode_btn.pack(side=tk.RIGHT, padx=1)
-        _tip(self.mode_btn, "Свернуть в полоску / развернуть в окно")
+        self.mode_btn = ttk.Button(self.toolbar_bar, text="\u25f1", command=self._toggle_mode, width=3)
+        self.mode_btn.pack(side=tk.RIGHT, padx=1, pady=2)
+        _tip(self.mode_btn, "Свернуть в полоску / Развернуть")
 
-        close_btn = tk.Button(self.toolbar_bar, text="\u2715", command=self.root.destroy,
-                              bd=0, relief=tk.FLAT, bg="#f0f0f0", activebackground="#d0d0d0",
-                              padx=8, pady=4, font=("Arial", 10), cursor="hand2")
-        close_btn.pack(side=tk.RIGHT, padx=1)
-        _tip(close_btn, "Закрыть")
+        self.backend_label = tk.Label(self.toolbar_bar, text="Git: none", fg="#555", bg="#ffffff", relief=tk.SUNKEN, bd=1, font=("Segoe UI", 8), padx=4, pady=2)
+        self.backend_label.pack(side=tk.RIGHT, padx=4, pady=2)
+
+
 
     def _build_main(self):
         pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
@@ -156,10 +163,34 @@ class StudioWindow:
         self.nb.pack(fill=tk.BOTH, expand=True)
         ff = ttk.Frame(self.nb)
         self.nb.add(ff, text="📄 Файл")
-        self.editor = scrolledtext.ScrolledText(ff, wrap=tk.NONE, font=("Courier New", 10))
+        find_bar = ttk.Frame(ff)
+        find_bar.pack(fill=tk.X, padx=3, pady=(3, 0))
+        ttk.Label(find_bar, text="🔍 Найти:").pack(side=tk.LEFT)
+        self.find_var = tk.StringVar()
+        self.find_entry = ttk.Entry(find_bar, textvariable=self.find_var, width=32)
+        self.find_entry.pack(side=tk.LEFT, padx=3)
+        self.find_entry.bind("<Return>", lambda e: self._find_in_editor(forward=True))
+        self.find_entry.bind("<Shift-Return>", lambda e: self._find_in_editor(forward=False))
+        self.find_var.trace_add("write", lambda *a: self._find_in_editor(forward=True))
+        ttk.Button(find_bar, text="◀", width=2, command=lambda: self._find_in_editor(forward=False)).pack(side=tk.LEFT, padx=1)
+        ttk.Button(find_bar, text="▶", width=2, command=lambda: self._find_in_editor(forward=True)).pack(side=tk.LEFT, padx=1)
+        ttk.Button(find_bar, text="✕", width=2, command=self._clear_find).pack(side=tk.LEFT, padx=1)
+        self.find_count_label = ttk.Label(find_bar, text="", foreground="#666")
+        self.find_count_label.pack(side=tk.LEFT, padx=6)
+        ttk.Separator(find_bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4)
+        ttk.Button(find_bar, text="💾 Сохранить", command=self._save_editor_file).pack(side=tk.LEFT, padx=2)
+        ttk.Button(find_bar, text="↩️", width=2, command=lambda: self.editor.edit_undo()).pack(side=tk.LEFT, padx=1)
+        ttk.Button(find_bar, text="↪️", width=2, command=lambda: self.editor.edit_redo()).pack(side=tk.LEFT, padx=1)
+        ttk.Button(find_bar, text="🎨", width=2, command=self._highlight_editor).pack(side=tk.LEFT, padx=1)
+        self.editor = scrolledtext.ScrolledText(ff, wrap=tk.NONE, font=("Courier New", 10), undo=True)
         self.editor.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
         syntax_highlighter.setup_tags(self.editor)
-        self.editor.config(state=tk.DISABLED)
+        self.editor.tag_configure("find_hit", background="#FFE082", foreground="black")
+        self.editor.tag_configure("find_current", background="#FF8A65", foreground="white")
+        self.editor_modified = False
+        self.editor.bind("<KeyRelease>", self._on_editor_change)
+        self.editor.bind("<Control-s>", lambda e: self._save_editor_file())
+        self._bind_zoom(self.editor)
         jf = ttk.Frame(self.nb)
         self.nb.add(jf, text="📥 JSON")
         self.json_text = scrolledtext.ScrolledText(jf, wrap=tk.WORD, font=("Courier New", 9))
@@ -175,10 +206,14 @@ class StudioWindow:
         pt = ttk.Frame(prf)
         pt.pack(fill=tk.X, padx=3, pady=3)
         ttk.Label(pt, text="Промпт:").pack(side=tk.LEFT)
-        self.prompt_combo = ttk.Combobox(pt, values=list_prompts(), state="readonly", width=25)
+        self.prompt_combo = ttk.Combobox(pt, values=list(self._get_merged_prompts().keys()), state="readonly", width=25)
         self.prompt_combo.pack(side=tk.LEFT, padx=5)
         self.prompt_combo.current(0)
         self.prompt_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_prompt_text())
+        def edit_from_main():
+            self._edit_single_prompt(self.prompt_combo.get())
+            self._refresh_prompt_text()
+        ttk.Button(pt, text="✏️ Редактировать", command=edit_from_main).pack(side=tk.LEFT, padx=2)
         ttk.Button(pt, text="📋 Копировать", command=self._copy_prompt).pack(side=tk.LEFT, padx=2)
         ttk.Button(pt, text="📎+Дерево", command=self._copy_prompt_with_structure).pack(side=tk.LEFT, padx=2)
         ttk.Button(pt, text="📎+Файл", command=self._copy_prompt_with_file).pack(side=tk.LEFT, padx=2)
@@ -200,6 +235,7 @@ class StudioWindow:
         self.log_text = scrolledtext.ScrolledText(lf, wrap=tk.WORD, font=("Arial", 9))
         self.log_text.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
         self.nb.select(0)
+        self.root.bind("<Control-f>", lambda e: self._focus_find() if hasattr(self, "find_entry") else None)
 
     def _build_statusbar(self):
         self.status_frame = ttk.Frame(self.root)
@@ -232,7 +268,8 @@ class StudioWindow:
             pass
 
     def _refresh_prompt_text(self):
-        text = get_prompt(self.prompt_combo.get())
+        merged = self._get_merged_prompts()
+        text = merged.get(self.prompt_combo.get(), "")
         self.prompt_text.config(state=tk.NORMAL)
         self.prompt_text.delete("1.0", tk.END)
         self.prompt_text.insert("1.0", text)
@@ -291,7 +328,7 @@ class StudioWindow:
             n = export_json(self.project_path, out)
             self.log(f"⚡ Дамп: {n} файлов → dumps/{Path(out).name}")
         except Exception as e:
-            messagebox.showerror("Ошибка", str(e))
+            self._error("Ошибка экспорта", str(e))
             self.log(f"❌ Дамп: {e}")
 
     def _update_project_label(self):
@@ -299,11 +336,11 @@ class StudioWindow:
             if self.project_path:
                 name = Path(self.project_path).name or self.project_path
                 self.project_label.config(text=f"\U0001F4C2 {name}", fg="#0a5c2a")
-                self.root.title(f"Codegen Studio — {name}")
             else:
                 self.project_label.config(text="— проект не открыт —", fg="#666")
         except Exception:
             pass
+        self._update_title()
 
 
     def _gitignore_rules(self):
@@ -333,6 +370,232 @@ class StudioWindow:
             else:
                 self.tree.insert(parent, "end", text="📄 " + p.name, values=(str(p),))
 
+    def _on_editor_change(self, event=None):
+        if not getattr(self, 'editor_modified', False):
+            self.editor_modified = True
+            self._update_title()
+        # Умная задержка (debounce) для подсветки
+        if not hasattr(self, '_hl_after'):
+            self._hl_after = None
+        if self._hl_after:
+            self.root.after_cancel(self._hl_after)
+        self._hl_after = self.root.after(800, self._highlight_editor)
+
+    def _save_editor_file(self):
+        if not self.current_file:
+            return
+        try:
+            content = self.editor.get("1.0", tk.END).rstrip("\n") + "\n"
+            Path(self.current_file).write_text(content, encoding="utf-8")
+            self.current_content = content
+            self.editor_modified = False
+            self._update_title()
+            self.log(f"Сохранён {Path(self.current_file).name}")
+            self._highlight_editor()
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить:\n{e}", parent=self.root)
+
+    def _highlight_editor(self):
+        content = self.editor.get("1.0", tk.END)
+        lang = "python" if (self.current_file or "").endswith(".py") else "text"
+        syntax_highlighter.apply_highlight(self.editor, content, lang)
+
+    def _update_title(self):
+        if not self.project_path:
+            self.root.title("Codegen Studio")
+            return
+        name = Path(self.project_path).name
+        fname = Path(self.current_file).name if self.current_file else ""
+        mod = " *" if getattr(self, 'editor_modified', False) else ""
+        if fname:
+            self.root.title(f"Codegen Studio — {name} / {fname}{mod}")
+        else:
+            self.root.title(f"Codegen Studio — {name}{mod}")
+
+    def _on_close_main(self):
+        if getattr(self, 'editor_modified', False) and self.current_file:
+            ans = messagebox.askyesnocancel("Не сохранено", "Файл изменён. Сохранить перед выходом?", parent=self.root)
+            if ans is None:
+                return
+            if ans:
+                self._save_editor_file()
+        self.root.destroy()
+
+
+    def _bind_zoom(self, widget, base_size=10):
+        """Zoom в редакторе: Ctrl+Wheel, Ctrl+/-/0."""
+        try:
+            f = widget.cget("font")
+            if isinstance(f, tuple) and len(f) >= 2:
+                family, size = f[0], int(f[1])
+            elif isinstance(f, str):
+                parts = f.split()
+                family = parts[0] if parts else "Courier New"
+                size = int(parts[1]) if len(parts) > 1 else base_size
+            else:
+                family, size = "Courier New", base_size
+        except Exception:
+            family, size = "Courier New", base_size
+
+        state = {"family": family, "size": size, "base": size}
+
+        def apply():
+            widget.config(font=(state["family"], state["size"]))
+
+        def zin(event=None):
+            state["size"] = min(state["size"] + 1, 40)
+            apply()
+            return "break"
+
+        def zout(event=None):
+            state["size"] = max(state["size"] - 1, 6)
+            apply()
+            return "break"
+
+        def zreset(event=None):
+            state["size"] = state["base"]
+            apply()
+            return "break"
+
+        def wheel(event):
+            if event.delta > 0:
+                return zin()
+            return zout()
+
+        widget.bind("<Control-MouseWheel>", wheel)
+        widget.bind("<Control-Button-4>", zin)
+        widget.bind("<Control-Button-5>", zout)
+        widget.bind("<Control-plus>", zin)
+        widget.bind("<Control-equal>", zin)
+        widget.bind("<Control-minus>", zout)
+        widget.bind("<Control-0>", zreset)
+        widget._zoom_state = state
+
+
+    def _get_custom_prompts_path(self):
+        if not self.project_path:
+            return None
+        d = Path(self.project_path) / ".codegen_studio"
+        d.mkdir(exist_ok=True)
+        return d / "custom_prompts.json"
+
+    def _load_custom_prompts(self):
+        path = self._get_custom_prompts_path()
+        if path and path.exists():
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _get_merged_prompts(self):
+        import prompts
+        base = dict(prompts.PROMPTS)
+        base.update(self._load_custom_prompts())
+        return base
+
+    def _save_custom_prompt(self, name, text):
+        path = self._get_custom_prompts_path()
+        if not path:
+            return
+        data = self._load_custom_prompts()
+        data[name] = text
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            self.log(f"Сохранен кастомный промпт: {name}")
+        except Exception as e:
+            self.log(f"Ошибка сохранения промпта: {e}")
+
+    def _edit_single_prompt(self, name):
+        merged = self._get_merged_prompts()
+        current_text = merged.get(name, "")
+        win = tk.Toplevel(self.root)
+        win.title(f"Редактирование: {name}")
+        win.geometry("800x600")
+        win.transient(self.root)
+        win.grab_set()
+        tk.Label(win, text="Текст промпта (Markdown):", font=("Segoe UI", 10, "bold"), anchor=tk.W).pack(fill=tk.X, padx=10, pady=5)
+        txt = scrolledtext.ScrolledText(win, wrap=tk.WORD, font=("Consolas", 10), undo=True)
+        txt.insert("1.0", current_text)
+        txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        syntax_highlighter.setup_tags(txt)
+        syntax_highlighter.apply_highlight(txt, current_text, "markdown")
+        def apply_hl(event=None):
+            syntax_highlighter.apply_highlight(txt, txt.get("1.0", tk.END), "markdown")
+        txt.bind("<KeyRelease>", apply_hl)
+
+        bf = tk.Frame(win)
+        bf.pack(fill=tk.X, padx=10, pady=10)
+        def do_save():
+            new_text = txt.get("1.0", tk.END).rstrip("\n")
+            self._save_custom_prompt(name, new_text)
+            win.destroy()
+        ttk.Button(bf, text="↩️ Undo", command=lambda: txt.edit_undo()).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bf, text="↪️ Redo", command=lambda: txt.edit_redo()).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bf, text="🎨 Подсветка", command=apply_hl).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bf, text="Отмена", command=win.destroy).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(bf, text="💾 Сохранить", command=do_save).pack(side=tk.RIGHT, padx=2)
+        win.wait_window()
+
+
+    def _focus_find(self):
+        self.find_entry.focus_set()
+        self.find_entry.select_range(0, tk.END)
+
+    def _find_in_editor(self, forward=True):
+        if not hasattr(self, "find_entry"):
+            return
+        q = self.find_var.get()
+        self.editor.tag_remove("find_hit", "1.0", tk.END)
+        self.editor.tag_remove("find_current", "1.0", tk.END)
+        if not q:
+            if hasattr(self, "find_count_label"):
+                self.find_count_label.config(text="")
+            return
+        content = self.editor.get("1.0", tk.END)
+        ql = q.lower()
+        cl = content.lower()
+        hits = []
+        start = 0
+        while True:
+            idx = cl.find(ql, start)
+            if idx == -1:
+                break
+            hits.append(idx)
+            start = idx + 1
+        for h in hits:
+            s = f"1.0+{h}c"
+            e = f"1.0+{h + len(q)}c"
+            self.editor.tag_add("find_hit", s, e)
+        if not hits:
+            self.find_count_label.config(text="0/0", foreground="red")
+            return
+        cur = self.editor.index(tk.INSERT)
+        cur_char = len(self.editor.get("1.0", cur))
+        if forward:
+            nxt = next((h for h in hits if h > cur_char), hits[0])
+        else:
+            nxt = next((h for h in reversed(hits) if h < cur_char), hits[-1])
+        s = f"1.0+{nxt}c"
+        e = f"1.0+{nxt + len(q)}c"
+        self.editor.tag_add("find_current", s, e)
+        self.editor.see(s)
+        self.editor.mark_set(tk.INSERT, s)
+        num = hits.index(nxt) + 1
+        self.find_count_label.config(text=f"{num}/{len(hits)}", foreground="#333")
+
+    def _clear_find(self):
+        self.find_var.set("")
+        self.editor.tag_remove("find_hit", "1.0", tk.END)
+        self.editor.tag_remove("find_current", "1.0", tk.END)
+        if hasattr(self, "find_count_label"):
+            self.find_count_label.config(text="")
+        self.editor.focus_set()
+
+
     def _on_tree_select(self, event):
         sel = self.tree.selection()
         if not sel:
@@ -343,18 +606,25 @@ class StudioWindow:
         file_path = vals[0]
         if not os.path.isfile(file_path):
             return
+        if getattr(self, 'editor_modified', False) and self.current_file:
+            ans = messagebox.askyesnocancel("Не сохранено", "Текущий файл изменён. Сохранить?", parent=self.root)
+            if ans is None:
+                return
+            if ans:
+                self._save_editor_file()
         self.current_file = file_path
         try:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 self.current_content = f.read()
         except Exception as e:
             self.current_content = f"[Ошибка чтения: {e}]"
-        self.editor.config(state=tk.NORMAL)
         self.editor.delete("1.0", tk.END)
         self.editor.insert("1.0", self.current_content)
+        self.editor.edit_reset()
+        self.editor_modified = False
+        self._update_title()
         lang = "python" if file_path.endswith(".py") else "text"
         syntax_highlighter.apply_highlight(self.editor, self.current_content, lang)
-        self.editor.config(state=tk.DISABLED)
         if not self._toolbar_mode:
             self.nb.select(0)
 
@@ -386,14 +656,14 @@ class StudioWindow:
         except json.JSONDecodeError as e:
             get_logger("errors").error("JSON parse failed: %s", e)
             self.log(f"❌ JSON parse: {e}")
-            messagebox.showerror("Ошибка JSON", str(e))
+            self._error("Ошибка JSON", str(e))
             return None, None
         try:
             actions = normalize_actions(data)
         except Exception as e:
             get_logger("errors").error("normalize_actions failed: %s", e)
             self.log(f"❌ normalize: {e}")
-            messagebox.showerror("Ошибка", f"Не удалось разобрать: {e}")
+            self._error("Ошибка разбора", f"Не удалось разобрать: {e}")
             return None, None
         return data, actions
 
@@ -438,14 +708,14 @@ class StudioWindow:
             for e in errors:
                 logger.error("validation: %s", e)
             self.log(f"❌ Валидация: {len(errors)} ошибок (см. errors.log)")
-            messagebox.showerror("Ошибки валидации", "\n".join(errors))
+            self._error("Ошибки валидации", "\n".join(errors))
             return
         sim = simulate(actions, self.project_path)
         if sim.errors:
             for e in sim.errors:
                 logger.error("simulation: %s", e)
             self.log(f"❌ Симуляция: {len(sim.errors)} ошибок (см. errors.log)")
-            messagebox.showerror("Ошибки симуляции", "\n".join(sim.errors))
+            self._error("Ошибки симуляции", "\n".join(sim.errors))
             return
         if not sim.changes and not sim.creations:
             if sim.warnings:
@@ -483,7 +753,7 @@ class StudioWindow:
             for e in errs:
                 logger.error("apply-failed: %s", e)
             self.log(f"❌ Ошибка применения: {len(errs)} (см. errors.log)")
-            messagebox.showerror("Ошибка", "\n".join(errs))
+            self._error("Ошибка применения", "\n".join(errs))
 
     def export_json_dialog(self):
 
@@ -536,7 +806,8 @@ class StudioWindow:
 
     def _copy_prompt(self):
         self.root.clipboard_clear()
-        self.root.clipboard_append(get_prompt(self.prompt_combo.get()))
+        merged = self._get_merged_prompts()
+        self.root.clipboard_append(merged.get(self.prompt_combo.get(), ""))
         self.log(f"📋 Промпт '{self.prompt_combo.get()}' скопирован")
 
     def _copy_prompt_with_structure(self):
@@ -548,7 +819,8 @@ class StudioWindow:
         for p in root.rglob("*"):
             if p.is_file() and should_include(p, root, rules):
                 lines.append(str(p.relative_to(root)).replace("\\", "/"))
-        text = get_prompt(self.prompt_combo.get()) + "\n\n### Структура проекта:\n" + "\n".join(lines)
+        merged = self._get_merged_prompts()
+        text = merged.get(self.prompt_combo.get(), "") + "\n\n### Структура проекта:\n" + "\n".join(lines)
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         self.log("📋 Промпт + структура скопированы")
@@ -558,7 +830,8 @@ class StudioWindow:
             messagebox.showinfo("Инфо", "Откройте файл в дереве")
             return
         rel = str(Path(self.current_file).relative_to(self.project_path)).replace("\\", "/")
-        text = get_prompt(self.prompt_combo.get()) + f"\n\n### Файл: {rel}\n```python\n{self.current_content}\n```"
+        merged = self._get_merged_prompts()
+        text = merged.get(self.prompt_combo.get(), "") + f"\n\n### Файл: {rel}\n```python\n{self.current_content}\n```"
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         self.log(f"📋 Промпт + файл {rel} скопированы")
@@ -618,28 +891,33 @@ class StudioWindow:
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", bool(self._s.get("always_on_top", True)))
         x, y = self._s.get("toolbar_pos", [100, 100])
-        # КРИТИЧНО: явная ширина и высота, иначе окно схлопывается до квадрата
-        self.root.geometry(f"850x46+{int(x)}+{int(y)}")
+        self.root.geometry(f"780x44+{int(x)}+{int(y)}")
+        if hasattr(self, 'btn_export'):
+            self.btn_export.pack_forget()
+            self.btn_docs.pack_forget()
+            self.btn_git.pack_forget()
         self.root.update_idletasks()
         self._make_draggable()
         self._toolbar_mode = True
-        self.mode_btn.config(text="\u25a3")
         self._s.set("mode", "toolbar")
         self._s.save()
-        self.log("Режим: toolbar (850x46)")
+        self.log("Режим: toolbar (780x44)")
 
     def exit_toolbar_mode(self):
         if not self._toolbar_mode:
             return
         self.root.overrideredirect(False)
         self.root.attributes("-topmost", False)
+        if hasattr(self, 'btn_export'):
+            self.btn_export.pack(side=tk.LEFT, padx=1, pady=2)
+            self.btn_docs.pack(side=tk.LEFT, padx=1, pady=2)
+            self.btn_git.pack(side=tk.LEFT, padx=1, pady=2)
         self.main_pane.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
         self.status_frame.pack(side=tk.BOTTOM, fill=tk.X)
         geom = self._s.get("window_geometry", "1100x700+200+100")
         self.root.geometry(geom)
         self.root.minsize(600, 400)
         self._toolbar_mode = False
-        self.mode_btn.config(text="\u25a3")
         self._s.set("mode", "window")
         self._s.save()
         self.log("Режим: window")
@@ -799,12 +1077,20 @@ class StudioWindow:
         tk.Label(win, text="1. Выбери промпт:", anchor=tk.W,
                  font=("Arial", 10, "bold")).pack(fill=tk.X, padx=12, pady=(10, 2))
         prompt_var = tk.StringVar()
-        prompts = list_prompts()
+        merged_prompts = self._get_merged_prompts()
+        prompts = list(merged_prompts.keys())
         combo = ttk.Combobox(win, textvariable=prompt_var, values=prompts,
                              state="readonly", width=50)
         combo.pack(fill=tk.X, padx=12, pady=2)
         if prompts:
             combo.current(0)
+
+        def edit_current():
+            self._edit_single_prompt(prompt_var.get())
+            refresh_preview()
+
+        btn_edit = tk.Button(win, text="✏️ Редактировать выбранный промпт", command=edit_current)
+        btn_edit.pack(anchor=tk.W, padx=12, pady=2)
 
         tk.Label(win, text="2. Что добавить к промпту:", anchor=tk.W,
                  font=("Arial", 10, "bold")).pack(fill=tk.X, padx=12, pady=(10, 2))
@@ -865,7 +1151,7 @@ class StudioWindow:
 
         def compose():
             parts = []
-            base = get_prompt(prompt_var.get())
+            base = self._get_merged_prompts().get(prompt_var.get(), "")
             if not base:
                 return ""
             if ctx_var.get():
@@ -925,6 +1211,440 @@ class StudioWindow:
 
         refresh_preview()
         win.wait_window()
+
+    def _open_folder(self, path):
+        import subprocess, sys
+        if not path or not os.path.isdir(path):
+            self.log(f"Папка не существует: {path}")
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            self.log(f"Не удалось открыть папку: {e}")
+
+    def _dump_dialog(self):
+        if not self.project_path:
+            messagebox.showinfo("Инфо", "Сначала откройте проект")
+            return
+        from datetime import datetime
+        dumps_dir = Path(self.project_path) / "dumps"
+        dumps_dir.mkdir(exist_ok=True)
+        project_name = Path(self.project_path).name
+        win = tk.Toplevel(self.root)
+        win.title("Экспорт проекта")
+        win.geometry("720x680")
+        win.transient(self.root)
+        win.grab_set()
+        
+        tk.Label(win, text=f"Проект: {project_name}", font=("Segoe UI", 11, "bold"), anchor=tk.W).pack(fill=tk.X, padx=12, pady=4)
+        info_files = tk.Label(win, text="Анализ...", font=("Segoe UI", 9), anchor=tk.W, fg="#555")
+        info_files.pack(fill=tk.X, padx=12, pady=2)
+        
+        tk.Label(win, text="Формат:", font=("Segoe UI", 10, "bold"), anchor=tk.W).pack(fill=tk.X, padx=12, pady=4)
+        format_var = tk.StringVar(value="json")
+        fframe = tk.Frame(win)
+        fframe.pack(fill=tk.X, padx=28)
+        tk.Radiobutton(fframe, text="JSON — один файл для передачи в LLM", variable=format_var, value="json").pack(anchor=tk.W)
+        tk.Radiobutton(fframe, text="ZIP — архив проекта (сохраняет структуру)", variable=format_var, value="zip").pack(anchor=tk.W)
+        
+        tk.Label(win, text="Куда сохранять:", font=("Segoe UI", 10, "bold"), anchor=tk.W).pack(fill=tk.X, padx=12, pady=4)
+        where_var = tk.StringVar(value="dumps")
+        wframe = tk.Frame(win)
+        wframe.pack(fill=tk.X, padx=28)
+        tk.Radiobutton(wframe, text=f"В папку dumps/  ({dumps_dir})", variable=where_var, value="dumps").pack(anchor=tk.W)
+        tk.Radiobutton(wframe, text="Выбрать папку вручную…", variable=where_var, value="manual").pack(anchor=tk.W)
+        
+        path_preview = tk.Label(win, text="", fg="#0a5c2a", anchor=tk.W, font=("Consolas", 9), wraplength=680, justify=tk.LEFT)
+        path_preview.pack(fill=tk.X, padx=12, pady=4)
+        
+        def update_preview(*args):
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if format_var.get() == "json":
+                name = f"{project_name}_dump_{ts}.json"
+            else:
+                name = f"{project_name}_{ts}.zip"
+            if where_var.get() == "dumps":
+                full = str(dumps_dir / name)
+            else:
+                full = f"<выбрать вручную>\\{name}"
+            path_preview.config(text=f"📄 {full}")
+        format_var.trace_add("write", update_preview)
+        where_var.trace_add("write", update_preview)
+        update_preview()
+        
+        tk.Label(win, text="Что НЕ попадёт:", font=("Segoe UI", 10, "bold"), anchor=tk.W).pack(fill=tk.X, padx=12, pady=4)
+        tk.Label(win, text=".git, __pycache__, venv, node_modules, logs/, dumps/,\n.env, *.bak, *.pem, и всё, что указано в .gitignore", font=("Segoe UI", 9), anchor=tk.W, fg="#aa3333", justify=tk.LEFT).pack(fill=tk.X, padx=12, pady=2)
+        
+        tk.Label(win, text="Предпросмотр (первые 12 файлов):", font=("Segoe UI", 10, "bold"), anchor=tk.W).pack(fill=tk.X, padx=12, pady=4)
+        preview_txt = scrolledtext.ScrolledText(win, height=10, font=("Consolas", 9), bg="#fafafa", state=tk.DISABLED)
+        preview_txt.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
+        
+        try:
+            from exporter import _collect_files
+            files = _collect_files(self.project_path)
+            total = len(files)
+            info_files.config(text=f"Файлов в экспорт: {total}")
+            preview_txt.config(state=tk.NORMAL)
+            for p, rel in files[:12]:
+                preview_txt.insert(tk.END, rel + "\n")
+            if total > 12:
+                preview_txt.insert(tk.END, f"... и ещё {total - 12} файлов\n")
+            preview_txt.config(state=tk.DISABLED)
+        except Exception as e:
+            info_files.config(text=f"Ошибка анализа: {e}", fg="red")
+            
+        def do_export():
+            fmt = format_var.get()
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if fmt == "json":
+                fname = f"{project_name}_dump_{ts}.json"
+            else:
+                fname = f"{project_name}_{ts}.zip"
+            if where_var.get() == "dumps":
+                out = str(dumps_dir / fname)
+            else:
+                ext = ".json" if fmt == "json" else ".zip"
+                out = filedialog.asksaveasfilename(defaultextension=ext, initialfile=fname, initialdir=str(dumps_dir), filetypes=[("JSON" if fmt == "json" else "ZIP", f"*{ext}")], title="Куда сохранить экспорт?")
+                if not out:
+                    return
+            try:
+                n = export_json(self.project_path, out) if fmt == "json" else export_zip(self.project_path, out)
+                self.log(f"📤 Экспорт: {n} файлов → {out}")
+                win.destroy() # Закрываем окно настроек сразу после экспорта
+                ans = messagebox.askyesno("Экспорт завершен", f"Файлов: {n}\nСохранено в:\n{out}\n\nОткрыть папку с файлом?")
+                if ans:
+                    self._open_folder(os.path.dirname(out))
+            except Exception as e:
+                self._error("Ошибка экспорта", str(e))
+                self.log(f"❌ Экспорт: {e}")
+                
+        bf = tk.Frame(win)
+        bf.pack(fill=tk.X, padx=12, pady=8)
+        tk.Button(bf, text="📂 Открыть dumps/", command=lambda: self._open_folder(str(dumps_dir))).pack(side=tk.LEFT)
+        tk.Button(bf, text="Закрыть", command=win.destroy).pack(side=tk.RIGHT, padx=4)
+        tk.Button(bf, text="💾 Экспортировать", bg="#4CAF50", fg="white", activebackground="#45a049", activeforeground="white", font=("Segoe UI", 10, "bold"), padx=14, pady=6, command=do_export).pack(side=tk.RIGHT, padx=4)
+        win.wait_window()
+
+
+    def _open_folder(self, path):
+        import subprocess, sys
+        if not path or not os.path.isdir(path):
+            self.log(f"Папка не существует: {path}")
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            self.log(f"Не удалось открыть папку: {e}")
+
+    def _dump_dialog(self):
+        if not self.project_path:
+            messagebox.showinfo("Инфо", "Сначала откройте проект")
+            return
+        from datetime import datetime
+        dumps_dir = Path(self.project_path) / "dumps"
+        dumps_dir.mkdir(exist_ok=True)
+        project_name = Path(self.project_path).name
+        win = tk.Toplevel(self.root)
+        win.title("Экспорт проекта")
+        win.geometry("720x680")
+        win.transient(self.root)
+        win.grab_set()
+        tk.Label(win, text=f"Проект: {project_name}",
+                 font=("Arial", 11, "bold"), anchor=tk.W).pack(fill=tk.X, padx=12, pady=4)
+        info_files = tk.Label(win, text="Анализ...", font=("Arial", 9), anchor=tk.W, fg="#555")
+        info_files.pack(fill=tk.X, padx=12, pady=2)
+        tk.Label(win, text="Формат:", font=("Arial", 10, "bold"), anchor=tk.W).pack(fill=tk.X, padx=12, pady=4)
+        format_var = tk.StringVar(value="json")
+        fframe = tk.Frame(win)
+        fframe.pack(fill=tk.X, padx=28)
+        tk.Radiobutton(fframe, text="JSON — один файл для передачи в LLM",
+                       variable=format_var, value="json").pack(anchor=tk.W)
+        tk.Radiobutton(fframe, text="ZIP — архив проекта (сохраняет структуру)",
+                       variable=format_var, value="zip").pack(anchor=tk.W)
+        tk.Label(win, text="Куда сохранять:", font=("Arial", 10, "bold"), anchor=tk.W).pack(fill=tk.X, padx=12, pady=4)
+        where_var = tk.StringVar(value="dumps")
+        wframe = tk.Frame(win)
+        wframe.pack(fill=tk.X, padx=28)
+        tk.Radiobutton(wframe, text=f"В папку dumps/  ({dumps_dir})",
+                       variable=where_var, value="dumps").pack(anchor=tk.W)
+        tk.Radiobutton(wframe, text="Выбрать папку вручную…",
+                       variable=where_var, value="manual").pack(anchor=tk.W)
+        path_preview = tk.Label(win, text="", fg="#0a5c2a", anchor=tk.W,
+                                font=("Courier New", 9), wraplength=680, justify=tk.LEFT)
+        path_preview.pack(fill=tk.X, padx=12, pady=4)
+        def update_preview(*args):
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if format_var.get() == "json":
+                name = f"{project_name}_dump_{ts}.json"
+            else:
+                name = f"{project_name}_{ts}.zip"
+            if where_var.get() == "dumps":
+                full = str(dumps_dir / name)
+            else:
+                full = f"<выбрать вручную>\\{name}"
+            path_preview.config(text=f"📄 {full}")
+        format_var.trace_add("write", update_preview)
+        where_var.trace_add("write", update_preview)
+        update_preview()
+        tk.Label(win, text="Что НЕ попадёт:", font=("Arial", 10, "bold"), anchor=tk.W).pack(fill=tk.X, padx=12, pady=4)
+        tk.Label(win, text=".git, __pycache__, venv, node_modules, logs/, dumps/,\n.env, *.bak, *.pem, и всё, что указано в .gitignore",
+                 font=("Arial", 9), anchor=tk.W, fg="#aa3333", justify=tk.LEFT).pack(fill=tk.X, padx=12, pady=2)
+        tk.Label(win, text="Предпросмотр (первые 12 файлов):", font=("Arial", 10, "bold"), anchor=tk.W).pack(fill=tk.X, padx=12, pady=4)
+        preview_txt = scrolledtext.ScrolledText(win, height=10, font=("Courier New", 9), bg="#fafafa", state=tk.DISABLED)
+        preview_txt.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
+        try:
+            from exporter import _collect_files
+            files = _collect_files(self.project_path)
+            total = len(files)
+            info_files.config(text=f"Файлов в экспорт: {total}")
+            preview_txt.config(state=tk.NORMAL)
+            for p, rel in files[:12]:
+                preview_txt.insert(tk.END, rel + "\n")
+            if total > 12:
+                preview_txt.insert(tk.END, f"... и ещё {total - 12} файлов\n")
+            preview_txt.config(state=tk.DISABLED)
+        except Exception as e:
+            info_files.config(text=f"Ошибка анализа: {e}", fg="red")
+        result_frame = tk.Frame(win)
+        result_frame.pack(fill=tk.X, padx=12, pady=4)
+        def do_export():
+            fmt = format_var.get()
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if fmt == "json":
+                fname = f"{project_name}_dump_{ts}.json"
+            else:
+                fname = f"{project_name}_{ts}.zip"
+            if where_var.get() == "dumps":
+                out = str(dumps_dir / fname)
+            else:
+                ext = ".json" if fmt == "json" else ".zip"
+                out = filedialog.asksaveasfilename(defaultextension=ext, initialfile=fname,
+                                                   initialdir=str(dumps_dir),
+                                                   filetypes=[("JSON" if fmt == "json" else "ZIP", f"*{ext}")],
+                                                   title="Куда сохранить экспорт?")
+                if not out:
+                    return
+            try:
+                n = export_json(self.project_path, out) if fmt == "json" else export_zip(self.project_path, out)
+                self.log(f"📤 Экспорт: {n} файлов → {out}")
+                for w in result_frame.winfo_children():
+                    w.destroy()
+                size_kb = os.path.getsize(out) / 1024 if os.path.exists(out) else 0
+                box = tk.LabelFrame(result_frame, text="✅ Готово", fg="#0a5c2a")
+                box.pack(fill=tk.X, pady=4)
+                tk.Label(box, text=f"Файлов: {n}   Размер: {size_kb:.1f} KB", font=("Arial", 9), anchor=tk.W).pack(fill=tk.X, padx=6, pady=2)
+                tk.Label(box, text=out, font=("Courier New", 9), fg="#005a9e", anchor=tk.W, wraplength=680, justify=tk.LEFT).pack(fill=tk.X, padx=6)
+                btns = tk.Frame(box)
+                btns.pack(fill=tk.X, padx=6, pady=4)
+                tk.Button(btns, text="📂 Открыть папку", command=lambda: self._open_folder(os.path.dirname(out))).pack(side=tk.LEFT, padx=2)
+                tk.Button(btns, text="📄 Открыть файл", command=lambda: os.startfile(out) if hasattr(os, "startfile") else None).pack(side=tk.LEFT, padx=2)
+                def copy_path():
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(out)
+                tk.Button(btns, text="📋 Путь в буфер", command=copy_path).pack(side=tk.LEFT, padx=2)
+            except Exception as e:
+                messagebox.showerror("Ошибка", str(e))
+                self.log(f"❌ Экспорт: {e}")
+        bf = tk.Frame(win)
+        bf.pack(fill=tk.X, padx=12, pady=8)
+        tk.Button(bf, text="📂 Открыть dumps/", command=lambda: self._open_folder(str(dumps_dir))).pack(side=tk.LEFT)
+        tk.Button(bf, text="Отмена", command=win.destroy).pack(side=tk.RIGHT, padx=4)
+        tk.Button(bf, text="💾 Экспортировать", bg="#4CAF50", fg="white",
+                  activebackground="#45a049", activeforeground="white",
+                  font=("Arial", 10, "bold"), padx=14, pady=6,
+                  command=do_export).pack(side=tk.RIGHT, padx=4)
+        win.wait_window()
+
+
+    def _docs_dialog(self):
+        if not self.project_path:
+            messagebox.showinfo("Инфо", "Сначала откройте проект")
+            return
+        docs_dir = Path(self.project_path) / "docs"
+        if not docs_dir.exists():
+            messagebox.showinfo("Инфо", f"Папка docs/ не найдена:\n{docs_dir}")
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Документация проекта — редактор")
+        win.geometry("1200x780")
+        win.transient(self.root)
+
+        main = ttk.PanedWindow(win, orient=tk.HORIZONTAL)
+        main.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        left = ttk.Frame(main)
+        main.add(left, weight=1)
+        ttk.Label(left, text="Файлы docs/:", font=("Arial", 9, "bold")).pack(anchor=tk.W, padx=3, pady=2)
+        lb = tk.Listbox(left, font=("Courier New", 10))
+        lb.pack(fill=tk.BOTH, expand=True, padx=3, pady=2)
+
+        right = ttk.Frame(main)
+        main.add(right, weight=4)
+
+        state = {"modified": False, "path": None}
+
+        rtb = ttk.Frame(right)
+        rtb.pack(fill=tk.X, padx=3, pady=2)
+        title_lbl = ttk.Label(rtb, text="", font=("Arial", 10, "bold"))
+        title_lbl.pack(side=tk.LEFT)
+
+        view = scrolledtext.ScrolledText(right, wrap=tk.WORD, font=("Courier New", 10),
+                                         state=tk.NORMAL, undo=True, bg="#ffffff")
+        view.pack(fill=tk.BOTH, expand=True, padx=3, pady=2)
+        syntax_highlighter.setup_tags(view)
+        self._bind_zoom(view)
+
+        def mark_modified(*args):
+            if not state["modified"]:
+                state["modified"] = True
+                cur = title_lbl.cget("text").rstrip(" *")
+                title_lbl.config(text=cur + " *")
+
+        def save_current():
+            if not state["path"]:
+                return
+            try:
+                content = view.get("1.0", tk.END).rstrip("\n") + "\n"
+                Path(state["path"]).write_text(content, encoding="utf-8")
+                state["modified"] = False
+                title_lbl.config(text=title_lbl.cget("text").rstrip(" *"))
+                self.log(f"Сохранён документ: {Path(state['path']).name}")
+                syntax_highlighter.apply_highlight(view, content, "markdown")
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось сохранить:\n{e}", parent=win)
+
+        def apply_hl():
+            syntax_highlighter.apply_highlight(view, view.get("1.0", tk.END), "markdown")
+
+        ttk.Button(rtb, text="🎨 Подсветка", command=apply_hl).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(rtb, text="↪️ Redo", command=lambda: view.edit_redo()).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(rtb, text="↩️ Undo", command=lambda: view.edit_undo()).pack(side=tk.RIGHT, padx=2)
+        ttk.Button(rtb, text="💾 Сохранить", command=save_current).pack(side=tk.RIGHT, padx=2)
+
+        view.bind("<KeyRelease>", mark_modified)
+        win.bind("<Control-s>", lambda e: save_current())
+
+        files_ref = {"list": []}
+
+        def load_file(path):
+            if state["modified"]:
+                ans = messagebox.askyesnocancel("Не сохранено",
+                    "Текущий файл изменён. Сохранить перед переключением?", parent=win)
+                if ans is None:
+                    return
+                if ans:
+                    save_current()
+            try:
+                text = Path(path).read_text(encoding="utf-8")
+            except Exception as e:
+                text = f"[Ошибка чтения: {e}]"
+            state["path"] = path
+            state["modified"] = False
+            title_lbl.config(text=f"{Path(path).name} ({len(text)} симв.)")
+            view.delete("1.0", tk.END)
+            view.insert("1.0", text)
+            view.edit_reset()
+            syntax_highlighter.apply_highlight(view, text, "markdown")
+
+        def refresh_list(*args):
+            lb.delete(0, tk.END)
+            files = list(docs_dir.glob("*.md")) + list(docs_dir.glob("*.txt"))
+            order = ["INDEX.md", "README.md", "USER_GUIDE.md", "WORKFLOW.md", "JSON_FORMAT.md",
+                     "DIFF_DIALOG.md", "SETTINGS.md", "ARCHITECTURE.md", "EXTENDING.md",
+                     "TROUBLESHOOTING.md", "PROJECT_CONTEXT.md", "CHANGELOG.md", "GUIDELINES.md"]
+            def key(p):
+                try:
+                    return (order.index(p.name), p.name)
+                except ValueError:
+                    return (999, p.name)
+            files.sort(key=key)
+            for p in files:
+                lb.insert(tk.END, f"📄 {p.name}")
+            if files:
+                lb.selection_set(0)
+                load_file(files[0])
+            files_ref["list"] = files
+
+        def on_select(event=None):
+            sel = lb.curselection()
+            if not sel:
+                return
+            files = files_ref["list"]
+            if sel[0] < len(files):
+                load_file(files[sel[0]])
+
+        lb.bind("<<ListboxSelect>>", on_select)
+        refresh_list()
+
+        bf = tk.Frame(win)
+        bf.pack(fill=tk.X, padx=5, pady=6)
+        ttk.Button(bf, text="🔄 Обновить", command=refresh_list).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bf, text="📂 Открыть docs/", command=lambda: self._open_folder(str(docs_dir))).pack(side=tk.LEFT, padx=2)
+
+        def open_external():
+            import subprocess
+            p = state.get("path")
+            if not p:
+                return
+            try:
+                if sys.platform == "win32":
+                    os.startfile(p)
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", p])
+                else:
+                    subprocess.Popen(["xdg-open", p])
+            except Exception as e:
+                self.log(f"Не удалось открыть файл: {e}")
+
+        ttk.Button(bf, text="📄 Открыть внешне", command=open_external).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bf, text="❌ Закрыть", command=win.destroy).pack(side=tk.RIGHT, padx=2)
+
+        def on_close():
+            if state["modified"]:
+                ans = messagebox.askyesnocancel("Не сохранено",
+                    "Закрыть без сохранения изменений?", parent=win)
+                if ans is None:
+                    return
+                if ans:
+                    save_current()
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+        win.wait_window()
+
+    def _error(self, title, message, parent=None):
+        """Универсальное окно ошибки с логированием и копированием."""
+        try:
+            get_logger("errors").error("%s: %s", title, message)
+        except Exception:
+            pass
+        win = tk.Toplevel(parent or self.root)
+        win.title(f"Ошибка: {title}")
+        win.geometry("700x400")
+        win.transient(self.root)
+        win.grab_set()
+        tk.Label(win, text="Скопируйте текст ниже и отправьте разработчику:", font=("Segoe UI", 10), anchor=tk.W).pack(fill=tk.X, padx=10, pady=(10, 2))
+        txt = scrolledtext.ScrolledText(win, wrap=tk.WORD, font=("Consolas", 10), bg="#fdfdfd")
+        txt.insert("1.0", message)
+        txt.config(state=tk.DISABLED)
+        txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        def copy_and_close():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(message)
+            win.destroy()
+        tk.Button(win, text="📋 КОПИРОВАТЬ И ЗАКРЫТЬ", command=copy_and_close, bg="#4CAF50", fg="white", font=("Segoe UI", 10, "bold"), pady=6).pack(fill=tk.X, padx=10, pady=10)
+        win.wait_window()
+
 
     def _show_diff_dialog(self, sim):
         """Окно сравнения: поиск, список изменений, подсветка diff."""
