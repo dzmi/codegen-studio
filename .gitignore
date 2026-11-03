@@ -7,3 +7,5 @@ archive/
 venv/
 logs/
 *.codegen.bak
+AI_lite_dump.json.codegen_studio/
+AI_lite_dump.json
